@@ -42,7 +42,8 @@ from time import strftime
 from copy import deepcopy
 import xmltodict
 
-musescore = "org.musescore.MuseScore"
+musescore = r"C:\Program Files\MuseScore 3\bin\MuseScore3.exe" # windows musescore path
+# musescore =  "org.musescore.MuseScore" # linux
 
 def get_desired_instrument_json(instrument_name = "clarinet"):
     etree_xml = etree.parse("instruments.xml")
@@ -111,7 +112,10 @@ def generate_parts(input_filename):
     measure_indices = []
     tempo_elements = []
     tempo_placement = []
-    vbox_element = mscx_obj.Score.Staff[0].VBox
+    if hasattr(mscx_obj.Score.Staff[0], 'VBox'):
+        vbox_element = mscx_obj.Score.Staff[0].VBox
+    else:
+        vbox_element = None
     
     for x in mscx_obj.Score.Staff[0].findall(".//Tempo"):
         measure_parent = x.getparent().getparent()
@@ -124,7 +128,7 @@ def generate_parts(input_filename):
     mscx_obj.Score.Order = [] 
 
     for i in range(n_parts):
-        output_dictionary["parts"].append(parts[i].trackName.text)
+        output_dictionary["parts"].append(parts[i].Instrument.longName.text)
         mscx_obj.Score.metaTag._setText(parts[i].trackName.text)
         mscx_obj.Score.Staff = [staffs[i]]
         mscx_obj.Score.Staff[0].attrib["id"] = "1"
@@ -132,7 +136,8 @@ def generate_parts(input_filename):
         mscx_obj.Score.Part[0].Staff.attrib["id"] = "1"
 
         if i > 0:
-            mscx_obj.Score.Staff[0].insert(0, vbox_element)
+            if vbox_element is not None:
+                mscx_obj.Score.Staff[0].insert(0, vbox_element)
 
             staff_children = mscx_obj.Score.Staff[0].getchildren() 
             for j, measure_index in enumerate(measure_indices):
