@@ -39,6 +39,7 @@ import json
 import base64
 from lxml import etree, objectify
 from time import strftime
+from copy import deepcopy
 import xmltodict
 
 musescore = "org.musescore.MuseScore"
@@ -95,6 +96,55 @@ def change_instrument(input_filename, output_filename, desired_instrument = "cla
     mscx_etree = etree.ElementTree(mscx_obj)
     mscx_etree.write(output_filename, pretty_print = True)
 
+def generate_parts(input_filename):
+    mscx_obj = objectify.parse(input_filename).getroot()
+    output_dictionary = {
+        "parts" : [],
+        "partsBin" : []
+    } 
+    
+    mscx_obj.Score.metaTag = objectify.StringElement("metaTag", name="partName")
+
+    parts = deepcopy(mscx_obj.Score.Part[:])
+    staffs = deepcopy(mscx_obj.Score.Staff[:])
+    n_parts = len(parts)
+    measure_indices = []
+    tempo_elements = []
+    tempo_placement = []
+    vbox_element = mscx_obj.Score.Staff[0].VBox
+    
+    for x in mscx_obj.Score.Staff[0].findall(".//Tempo"):
+        measure_parent = x.getparent().getparent()
+        measure_index = mscx_obj.Score.Staff[0].index(measure_parent)
+        tempo_index = x.getparent().index(x)
+        measure_indices.append(measure_index)
+        tempo_placement.append(tempo_index)
+        tempo_elements.append(x)
+
+    mscx_obj.Score.Order = [] 
+
+    for i in range(n_parts):
+        output_dictionary["parts"].append(parts[i].trackName.text)
+        mscx_obj.Score.metaTag._setText(parts[i].trackName.text)
+        mscx_obj.Score.Staff = [staffs[i]]
+        mscx_obj.Score.Staff[0].attrib["id"] = "1"
+        mscx_obj.Score.Part = [parts[i]]
+        mscx_obj.Score.Part[0].Staff.attrib["id"] = "1"
+
+        if i > 0:
+            mscx_obj.Score.Staff[0].insert(0, vbox_element)
+
+            staff_children = mscx_obj.Score.Staff[0].getchildren() 
+            for j, measure_index in enumerate(measure_indices):
+                staff_children[measure_index].voice.insert(tempo_placement[j], tempo_elements[j])
+
+        mscx_etree = etree.ElementTree(mscx_obj)
+        output_dictionary["partsBin"].append(
+            base64.b64encode(etree.tostring(mscx_etree, pretty_print=True))
+        )
+
+    return output_dictionary
+
 def generate_leading_audios(input_filename,
                             max_weight = 3, 
                             target_instrument = "clarinet",
@@ -111,14 +161,23 @@ def generate_leading_audios(input_filename,
 
     if not os.path.exists(os.path.join(folder_path, "parts", "mp3")):
         os.mkdir(os.path.join(folder_path, "parts", "mp3"))
+        
+    # 0. check if mscx file exists
+    if os.path.basename(input_filename).split('.')[-1] == "mscz":
+        if verbose: print(f"[{strftime('%H:%M:%S')}] Convert mscz to mscx")
+        proc_output = subprocess.run([musescore, '-o', input_filename[:-1] + "x", input_filename],
+                                     capture_output = True)
+        if process_verbose: print(proc_output)
+        input_filename = input_filename[:-1] + "x"
 
     # 1. split score
     if verbose: print(f"[{strftime('%H:%M:%S')}] Splitting score into parts")
-    splitter_process = subprocess.run([musescore, "--score-parts", file_path], \
-                                    capture_output = True)
-    parts_json = json.loads(splitter_process.stdout.decode())
-    part_names = parts_json["parts"]
-    parts_mscz_files = [os.path.join(folder_path, "parts", "mscz", f"{part_name}_background_{base_filename}.mscz") for part_name in part_names]
+    # splitter_process = subprocess.run([musescore, "--score-parts", file_path], \
+                                    # capture_output = True)
+    parts_dict = generate_parts(input_filename=input_filename)
+    # parts_dict = json.loads(splitter_process.stdout.decode())
+    part_names = parts_dict["parts"]
+    parts_mscx_files = [os.path.join(folder_path, "parts", "mscz", f"{part_name}_background_{base_filename}.mscx") for part_name in part_names]
     instrument_mscx_files = [os.path.join(folder_path, "parts", "mscz", f"{part_name}_lead_{base_filename}.mscx") for part_name in part_names]
     background_mp3_names = [os.path.join(folder_path, "parts", "mp3", f"{part_name}_background_{base_filename}.mp3") for part_name in part_names]
     lead_mp3_names = [os.path.join(folder_path, "parts", "mp3", f"{part_name}_lead_{base_filename}.mp3") for part_name in part_names]
@@ -126,22 +185,22 @@ def generate_leading_audios(input_filename,
     for i, bkg_mp3_name in enumerate(background_mp3_names):
         # 2. generate a mscx for each part
         if verbose: print(f"[{strftime('%H:%M:%S')}] Generate mscx file for {part_names[i]}")
-        with open(parts_mscz_files[i], "wb") as fout:
-            fout.write(base64.b64decode(parts_json['partsBin'][i]))
-        temp_mscx_file = parts_mscz_files[i][:-1] + 'x'
-        proc_output = subprocess.run([musescore, '-o', temp_mscx_file, parts_mscz_files[i]],
-                                     capture_output = True)
-        if process_verbose: print(proc_output)
+        with open(parts_mscx_files[i], "wb") as fout:
+            fout.write(base64.b64decode(parts_dict['partsBin'][i]))
+        # temp_mscx_file = parts_mscx_files[i][:-1] + 'x'
+        # proc_output = subprocess.run([musescore, '-o', temp_mscx_file, parts_mscx_files[i]],
+                                    #  capture_output = True)
+        # if process_verbose: print(proc_output)
 
         # 3. generate bck mp3
         if verbose: print(f"[{strftime('%H:%M:%S')}] Generate background mp3 for {part_names[i]}")
-        proc_output = subprocess.run([musescore, '-o', bkg_mp3_name, parts_mscz_files[i]],
+        proc_output = subprocess.run([musescore, '-o', bkg_mp3_name, parts_mscx_files[i]],
                                      capture_output = True)
         if process_verbose: print(proc_output)
 
         # 4. convert to given instrument
         if verbose: print(f"[{strftime('%H:%M:%S')}] Change instrument for {part_names[i]}")
-        change_instrument(temp_mscx_file, instrument_mscx_files[i], target_instrument)
+        change_instrument(parts_mscx_files[i], instrument_mscx_files[i], target_instrument)
 
         # 5. generate lead mp3
         if verbose: print(f"[{strftime('%H:%M:%S')}] Generate lead mp3 for {part_names[i]}")
