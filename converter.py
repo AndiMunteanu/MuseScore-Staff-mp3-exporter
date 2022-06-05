@@ -39,8 +39,8 @@ import json
 import base64
 from lxml import etree, objectify
 from time import strftime
-from copy import deepcopy
 import xmltodict
+from staff_splitter import *
 
 # musescore = r"C:\Program Files\MuseScore 3\bin\MuseScore3.exe" # windows musescore path
 musescore =  "org.musescore.MuseScore" # linux
@@ -97,85 +97,6 @@ def change_instrument(input_filename, output_filename, desired_instrument = "cla
     mscx_etree = etree.ElementTree(mscx_obj)
     mscx_etree.write(output_filename, pretty_print = True)
 
-def _get_tempo_elements(mscore_xml_object):
-    output_dictionary = dict()
-    output_dictionary["tempo_elements"] = mscore_xml_object.Score.Staff[0].findall(".//Tempo")
-    output_dictionary["measure_indices"] = []
-    output_dictionary["location_inside_measure"] = []
-
-    for temp_elem in output_dictionary["tempo_elements"]: 
-        measure_parent = temp_elem.getparent().getparent()
-
-        output_dictionary["measure_indices"].append(mscore_xml_object.Score.Staff[0].index(measure_parent))
-        output_dictionary["location_inside_measure"].append(temp_elem.getparent().index(temp_elem))
-    
-    return output_dictionary
-
-def _get_repeat_elements(mscore_xml_object):
-    output_dictionary = dict()
-    repeat_tag_names = ["Marker", "startRepeat", "endRepeat", "Jump"]
-    search_string = " or ".join(["self::" + tag_name for tag_name in repeat_tag_names])
-    output_dictionary["repeat_elements"] = mscore_xml_object.Score.Staff[0].xpath(f".//*[{search_string}]")
-    output_dictionary["measure_indices"] = []
-    output_dictionary["location_inside_measure"] = []
-
-    for repeat_elem in output_dictionary["repeat_elements"]:
-        measure_parent = repeat_elem.getparent()
-        
-        output_dictionary["measure_indices"].append(mscore_xml_object.Score.Staff[0].index(measure_parent))
-        output_dictionary["location_inside_measure"].append(measure_parent.index(repeat_elem))
-    
-    return output_dictionary
-
-def generate_parts(input_filename):
-    mscx_obj = objectify.parse(input_filename).getroot()
-    output_dictionary = {
-        "parts" : [],
-        "partsBin" : []
-    } 
-    
-    mscx_obj.Score.metaTag = objectify.StringElement("metaTag", name="partName")
-
-    parts = deepcopy(mscx_obj.Score.Part[:])
-    staffs = deepcopy(mscx_obj.Score.Staff[:])
-    n_parts = len(parts)
-    repeat_elements_dict = _get_repeat_elements(mscore_xml_object=mscx_obj)
-    tempo_elements_dict = _get_tempo_elements(mscore_xml_object=mscx_obj)
-
-    if hasattr(mscx_obj.Score.Staff[0], 'VBox'):
-        vbox_element = mscx_obj.Score.Staff[0].VBox
-    else:
-        vbox_element = None
-    
-    mscx_obj.Score.Order = [] 
-
-    for i in range(n_parts):
-        output_dictionary["parts"].append(parts[i].Instrument.longName.text)
-        mscx_obj.Score.metaTag._setText(parts[i].trackName.text)
-        mscx_obj.Score.Staff = [staffs[i]]
-        mscx_obj.Score.Staff[0].attrib["id"] = "1"
-        mscx_obj.Score.Part = [parts[i]]
-        mscx_obj.Score.Part[0].Staff.attrib["id"] = "1"
-
-        if i > 0:
-            if vbox_element is not None:
-                mscx_obj.Score.Staff[0].insert(0, vbox_element)
-
-            staff_children = mscx_obj.Score.Staff[0].getchildren() 
-            for j, measure_index in enumerate(tempo_elements_dict["measure_indices"]):
-                staff_children[measure_index].voice.insert(tempo_elements_dict["location_inside_measure"][j], 
-                                                           tempo_elements_dict["tempo_elements"][j])
-
-            for j, measure_index in enumerate(repeat_elements_dict["measure_indices"]):
-                staff_children[measure_index].insert(repeat_elements_dict["location_inside_measure"][j], 
-                                                     repeat_elements_dict["repeat_elements"][j])
-
-        mscx_etree = etree.ElementTree(mscx_obj)
-        output_dictionary["partsBin"].append(
-            base64.b64encode(etree.tostring(mscx_etree, pretty_print=True))
-        )
-
-    return output_dictionary
 
 def generate_leading_audios(input_filename,
                             max_weight = 3, 
@@ -278,6 +199,8 @@ if __name__ == "__main__":
         exit(f"the path {file_path} cannot be found")
 
     generate_leading_audios(input_filename=file_path,
-                            max_weight=max_weight,
-                            process_verbose=False,
-                            verbose=True)
+                             max_weight=max_weight,
+                             process_verbose=False,
+                             verbose=True)
+
+    
