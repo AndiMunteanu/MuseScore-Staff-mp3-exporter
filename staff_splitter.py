@@ -67,9 +67,6 @@ def _get_tempo_elements(mscore_xml_object):
     for temp_elem in candidates:
         measure_parent = temp_elem.getparent().getparent()
 
-        print(_get_passed_duration(temp_elem))
-        print(etree.tostring(temp_elem))
-        print(measure_parent.tag)
         if measure_parent.tag == "Measure":
             output_dictionary["tempo_elements"].append(temp_elem)
             output_dictionary["duration_passed"].append(
@@ -80,36 +77,6 @@ def _get_tempo_elements(mscore_xml_object):
                 temp_elem.getparent().index(temp_elem))
 
     return output_dictionary
-
-
-def _get_duration_combination(duration):
-    note_duration_tuples = [(key, value)
-                            for key, value in NOTES_DURATIONS_DICT.items()]
-    # make sure to have duration decreasingly sorted
-    note_duration_tuples.sort(key=lambda x: x[1], reverse=True)
-
-    combination = []
-    current_duration = duration
-
-    for duration_tuple in note_duration_tuples:
-        print(duration_tuple[0])
-        note_duration = duration_tuple[1]
-
-        if note_duration * 3/2 < current_duration:
-            n_notes = current_duration // (note_duration * 3/2)
-            combination.append((duration_tuple[0], n_notes, True))
-            current_duration -= n_notes * note_duration * 3/2
-
-        if note_duration < current_duration:
-            n_notes = current_duration // note_duration
-            combination.append((duration_tuple[0], n_notes, False))
-            current_duration -= n_notes * note_duration
-
-        if current_duration == 0:
-            break
-
-    print("curent_duration", current_duration)
-    return combination
 
 def _get_note_combination(interval):
     # DP approach works only with integers, thus the intervals must be converted to whole numbers
@@ -150,6 +117,78 @@ def _generate_rest_xml(duration_list):
         
     return rest_list
 
+def _get_fraction_string(duration):
+    eps = 1e-8
+    fact = 1
+    
+    while True:
+        if abs(int(duration) - duration) < eps:
+            return f"{int(duration)}/{fact}"
+        
+        fact = fact * 2
+        duration = duration * 2
+    
+def _generate_rest_xml(duration_list):
+    rest_list = []
+    for duration in duration_list:
+        if duration.startswith("dot_"):
+            xml_string = f"<Rest><dots>1</dots><durationType>{duration[4:]}</durationType></Rest>"
+        else:
+            xml_string = f"<Rest><durationType>{duration}</durationType></Rest>"
+        rest_list.append(objectify.XML(xml_string))
+
+    return rest_list
+
+def _generate_note_xml(duration_list, note_template):
+    note_list = []
+    n_notes = len(duration_list)
+
+    dots_element = note_template.find('dots')
+    if dots_element is not None:
+        note_template.remove(dots_element)
+        
+    prev_duration = 0
+
+    for i, duration in enumerate(duration_list):
+        new_note = deepcopy(note_template)
+        if duration.startswith("dot_"):
+            new_note.insert(0, objectify.XML("<dots>1</dots>")) 
+            new_note.durationType._setText(duration[4:])
+        else:
+            new_note.durationType._setText(duration)
+
+        duration_int = NOTES_DURATIONS_DICT[duration]
+        spanner_start = objectify.XML(f"""
+        <Spanner type="Tie">
+            <Tie></Tie>
+            <next>
+                <location>
+                    <fractions>{_get_fraction_string(duration_int)}</fractions>
+                </location>
+            </next>
+        </Spanner>    
+        """)
+
+        spanner_stop = objectify.XML(f"""
+        <Spanner type="Tie">
+            <prev>
+                <location>
+                    <fractions>-{_get_fraction_string(prev_duration)}</fractions>
+                </location>
+            </prev>
+        </Spanner>    
+        """)
+
+        prev_duration = duration_int
+
+        if i > 0:
+            new_note.Note.insert(0, spanner_stop)
+        if i < n_notes - 1:
+            new_note.Note.insert(0, spanner_start)
+
+        note_list.append(new_note)
+
+    return note_list 
 
 def _get_note_for_tempo(measure_elem, passed_duration):
     chords_rests_elems = measure_elem.xpath(".//*[self::Chord or self::Rest]")
@@ -173,22 +212,22 @@ def _get_note_for_tempo(measure_elem, passed_duration):
         if hasattr(note_elem, 'dots') and note_elem.dots.text == "1":
             duration = duration * 3 / 2
 
-        print(current_duration, duration)
         current_duration += duration
-        print(current_duration, passed_duration)
 
         if current_duration > passed_duration:
-            # print(_get_duration_combination(
-                # passed_duration + duration - current_duration))
             durations_before = _get_note_combination(passed_duration + duration - current_duration)
-            elements_before = _generate_rest_xml(durations_before)
             parent_elem = note_elem.getparent()
             index_elem = parent_elem.index(note_elem)
             parent_elem.remove(note_elem) 
 
-
             durations_after = _get_note_combination(current_duration - passed_duration)
-            elements_after = _generate_rest_xml(durations_after)
+            if note_elem.tag == "Rest":
+                elements_after = _generate_rest_xml(durations_after)  
+                elements_before = _generate_rest_xml(durations_before)
+            else:
+                elements_after = _generate_note_xml(durations_after, note_elem)
+                elements_before = _generate_note_xml(durations_before, note_elem)
+
             stop_note = elements_after[0]
 
             for elem in elements_after[::-1]:
@@ -196,13 +235,6 @@ def _get_note_for_tempo(measure_elem, passed_duration):
 
             for elem in elements_before[::-1]:
                 parent_elem.insert(index_elem, elem)
-            
-            
-            # print(current_duration - passed_duration)
-            print(current_duration - passed_duration)
-            print("right", current_duration - passed_duration, "left",
-                  duration - current_duration + passed_duration, duration)
-            # note_elem.addnext(objectify.XML("<test>a mres</test>"))
             break
         
     return stop_note
@@ -247,7 +279,6 @@ def generate_parts(input_filename):
     repeat_elements_dict = _get_repeat_elements(mscore_xml_object=mscx_obj)
     tempo_elements_dict = _get_tempo_elements(mscore_xml_object=mscx_obj)
 
-    print("--")
     if hasattr(mscx_obj.Score.Staff[0], 'VBox'):
         vbox_element = mscx_obj.Score.Staff[0].VBox
     else:
