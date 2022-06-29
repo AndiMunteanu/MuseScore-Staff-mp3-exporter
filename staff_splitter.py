@@ -249,6 +249,7 @@ def _get_repeat_elements(mscore_xml_object):
         f".//*[{search_string}]")
     output_dictionary["measure_indices"] = []
     output_dictionary["location_inside_measure"] = []
+    output_dictionary["repeat_elements"] = []
 
     for repeat_elem in candidates:
         measure_parent = repeat_elem.getparent()
@@ -287,7 +288,11 @@ def generate_parts(input_filename):
     mscx_obj.Score.Order = []
 
     for i in range(n_parts):
-        output_dictionary["parts"].append(parts[i].Instrument.longName.text)
+        if hasattr(parts[i].Instrument, "longName"):
+            output_dictionary["parts"].append(parts[i].Instrument.longName.text)
+        else:
+            output_dictionary["parts"].append(f"Instrument_{i}")
+        
         mscx_obj.Score.metaTag._setText(parts[i].trackName.text)
         mscx_obj.Score.Staff = [staffs[i]]
         mscx_obj.Score.Staff[0].attrib["id"] = "1"
